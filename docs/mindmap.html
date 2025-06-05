@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Mind Map</title>
+<style>
+body{font-family:Arial, sans-serif;margin:0;padding:1em;}
+#mindmap{padding:10px;cursor:pointer;}
+.node{display:inline-block;padding:4px 8px;border:1px solid #888;border-radius:4px;margin:2px;cursor:pointer;}
+.node.selected{background:#cce5ff;}
+.children{margin-left:40px;}
+.collapsed>.children{display:none;}
+.controls{margin-top:1em;}
+</style>
+</head>
+<body>
+<div id="mindmap"></div>
+<div class="controls">
+<button id="save">Save</button>
+<input type="file" id="load" style="display:none" accept=".md">
+<button id="loadButton">Load</button>
+</div>
+<script>
+let root=null;
+let selected=null;
+let editingNode=null;
+const mapEl=document.getElementById('mindmap');
+
+function selectNode(node){
+  selected=node;
+  render();
+}
+function startEditing(node){
+  editingNode=node;
+  node.el.setAttribute('contenteditable','true');
+  node.el.focus();
+  document.execCommand('selectAll',false,null);
+}
+function stopEditing(node){
+  node.text=node.el.textContent.trim();
+  node.el.removeAttribute('contenteditable');
+  editingNode=null;
+}
+function createChild(parent){
+  const n={text:'',children:[],collapsed:false,parent:parent};
+  parent.children.push(n);
+  selectNode(n);
+  render();
+  startEditing(n);
+}
+function deleteNode(node){
+  if(node.parent){
+    const idx=node.parent.children.indexOf(node);
+    node.parent.children.splice(idx,1);
+    selectNode(node.parent);
+  } else {
+    root=null;
+    selected=null;
+  }
+  render();
+}
+function getPrevSibling(node){
+  if(!node.parent) return null;
+  const s=node.parent.children;
+  const i=s.indexOf(node);
+  return i>0?s[i-1]:null;
+}
+function getNextSibling(node){
+  if(!node.parent) return null;
+  const s=node.parent.children;
+  const i=s.indexOf(node);
+  return i<s.length-1?s[i+1]:null;
+}
+function render(){
+  mapEl.innerHTML='';
+  if(!root) return;
+  buildDom(root,mapEl);
+}
+function buildDom(node,parent){
+  const wrap=document.createElement('div');
+  wrap.className='node-wrapper'+(node.collapsed?' collapsed':'');
+  const nodeEl=document.createElement('div');
+  node.el=nodeEl;
+  nodeEl.className='node';
+  nodeEl.textContent=node.text||'';
+  if(node===selected) nodeEl.classList.add('selected');
+  nodeEl.onclick=e=>{e.stopPropagation(); if(editingNode&&editingNode!==node){stopEditing(editingNode);} selectNode(node);};
+  wrap.appendChild(nodeEl);
+  const childrenEl=document.createElement('div');
+  childrenEl.className='children';
+  wrap.appendChild(childrenEl);
+  node.children.forEach(c=>buildDom(c,childrenEl));
+  parent.appendChild(wrap);
+}
+mapEl.addEventListener('click',e=>{
+  if(e.target===mapEl && !root){
+    root={text:'Root',children:[],collapsed:false,parent:null};
+    selectNode(root);
+    startEditing(root);
+  }
+});
+
+document.addEventListener('keydown',e=>{
+  if(editingNode){
+    if(e.key==='Enter'){
+      e.preventDefault();
+      stopEditing(editingNode);
+      render();
+    }
+    return;
+  }
+  if(!selected) return;
+  switch(e.key){
+    case 'Enter':
+      e.preventDefault();
+      startEditing(selected);
+      break;
+    case 'Delete':
+      e.preventDefault();
+      deleteNode(selected);
+      break;
+    case 'ArrowRight':
+      if(e.ctrlKey){
+        e.preventDefault();
+        createChild(selected);
+      } else {
+        e.preventDefault();
+        if(!selected.collapsed && selected.children.length){
+          selectNode(selected.children[0]);
+        }
+      }
+      break;
+    case 'ArrowLeft':
+      if(e.ctrlKey){
+        e.preventDefault();
+        selected.collapsed=!selected.collapsed;
+        render();
+      } else if(selected.parent){
+        e.preventDefault();
+        selectNode(selected.parent);
+      }
+      break;
+    case 'ArrowUp':
+      e.preventDefault();
+      const p=getPrevSibling(selected);
+      if(p) selectNode(p);
+      break;
+    case 'ArrowDown':
+      e.preventDefault();
+      const n=getNextSibling(selected);
+      if(n) selectNode(n);
+      break;
+    case 'Tab':
+      e.preventDefault();
+      const t=traverseNext(selected);
+      if(t) selectNode(t);
+      break;
+  }
+});
+function traverseNext(node){
+  if(node.children.length && !node.collapsed) return node.children[0];
+  while(node){
+    const n=getNextSibling(node);
+    if(n) return n;
+    node=node.parent;
+  }
+  return selected;
+}
+function toMarkdown(node,depth){
+  let md='  '.repeat(depth)+'- '+node.text+'\n';
+  node.children.forEach(c=>{md+=toMarkdown(c,depth+1);});
+  return md;
+}
+function saveToFile(){
+  if(!root) return;
+  const md=toMarkdown(root,0);
+  const blob=new Blob([md],{type:'text/markdown'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download='mindmap.md';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+function parseMarkdown(text){
+  const lines=text.split(/\r?\n/).filter(l=>l.trim());
+  const stack=[]; let r=null;
+  lines.forEach(line=>{
+    const m=line.match(/^( *)- (.*)$/);
+    if(!m) return;
+    const depth=Math.floor(m[1].length/2);
+    const node={text:m[2].trim(),children:[],collapsed:false,parent:null};
+    if(depth===0){r=node; stack[0]=node;}
+    else{
+      const p=stack[depth-1];
+      node.parent=p; p.children.push(node); stack[depth]=node;
+    }
+  });
+  return r;
+}
+function loadFromFile(e){
+  const file=e.target.files[0];
+  if(!file) return;
+  const reader=new FileReader();
+  reader.onload=()=>{
+    root=parseMarkdown(reader.result);
+    selected=root;
+    render();
+  };
+  reader.readAsText(file);
+}
+document.getElementById('save').onclick=saveToFile;
+document.getElementById('loadButton').onclick=()=>document.getElementById('load').click();
+document.getElementById('load').addEventListener('change',loadFromFile);
+</script>
+</body>
+</html>
